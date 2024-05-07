@@ -15,6 +15,7 @@ contract DeployKC is Script {
 
     // moved outside of run due to stackTooDeep exception caused by num of local vars
     kcCoin kcStableCoin;
+    kcEngine engine;
 
     function run() external returns(kcCoin, kcEngine, HelperConfig) {
             HelperConfig helperConfig = new HelperConfig();
@@ -34,10 +35,14 @@ contract DeployKC is Script {
         tvlRatios = [70, 80, 50];
 
         vm.startBroadcast();
-        kcCoin kc = new kcCoin();
-        kcEngine engine = new kcEngine(tokenAddresses, priceFeedAddresses, priceFeedDecimals, tvlRatios, address(kcStableCoin));
+    
+        kcStableCoin = new kcCoin();
+    
+        engine = new kcEngine(tokenAddresses, priceFeedAddresses, priceFeedDecimals, tvlRatios, address(kcStableCoin));
+        kcStableCoin.transferOwnership(address(engine));
+
         vm.stopBroadcast();
 
-        return (kc, engine, helperConfig);
+        return (kcStableCoin, engine, helperConfig);
     }
 }
