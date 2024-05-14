@@ -1,4 +1,4 @@
-// License-Identifier: MIT
+// SPDX-License-Identifier: MIT
 
 import {ICDP} from "./interfaces/ICDP.sol";
 import {kcCoin} from "./kcCoin.sol";
@@ -61,6 +61,7 @@ contract kcEngine is kcCoin, ReentrancyGuard {
     uint256 private constant EQUALIZER_PRECISION = 1e10;
     uint256 private constant PRECISION = 1e18;
     uint256 private constant LIQUIDATION_PRECISION = 100;
+    uint256 private LIQUIDATION_REWARD = 20;
     uint256 private constant INTEREST_PER_SHARE_PER_SECOND = 3_170_979_198; // positionSize/10 = positionSize *
     // seconds_per_year * interestPerSharePerSec
 
@@ -99,6 +100,7 @@ contract kcEngine is kcCoin, ReentrancyGuard {
         address indexed token,
         uint256 indexed amount
     );
+    event CollateralRedeemed(address indexed user, address indexed tokenAddress, uint256 indexed);
     event kcBorrowed(address indexed user, uint256 indexed amount);
 
     ////////////
@@ -161,6 +163,7 @@ contract kcEngine is kcCoin, ReentrancyGuard {
      * @param collateralToken the token to supply as collateral.
      * @param amountCollateral the amount of collateralToken to provide.
      */
+    
     function depositCollateral(
         address collateralToken,
         uint256 amountCollateral
@@ -187,7 +190,7 @@ contract kcEngine is kcCoin, ReentrancyGuard {
      * 
      * @param collateralTokenAddress The address of the token user wants to withdraw from
      * his own position to account
-     * @param amount  amount of token
+     * @param amount  amount of token 
      */
     
 
@@ -195,15 +198,19 @@ contract kcEngine is kcCoin, ReentrancyGuard {
         address collateralTokenAddress,
         uint256 amount
     ) public {
+        uint256 amountBorrowed = getUserKcBalance(msg.sender);
         CollateralToken memory tokenData = s_collateralTokenData[collateralTokenAddress];
 
         uint256 collateralAfterWithdrawal = s_collateralDeposited[msg.sender][collateralTokenAddress] - amount;
-
-
+           uint256 collateralValueRequiredToKeepltv =
+                (collateralAfterWithdrawal - amountBorrowed) * tokenData.ltvRatio / 100;
+            if (collateralValueRequiredToKeepltv > collateralAfterWithdrawal) {
+                revert("Withdrawal would violate LTV ratio");
+            }
 
         s_collateralDeposited[msg.sender][collateralTokenAddress] -= amount;
         IERC20(collateralTokenAddress).transfer(msg.sender, amount);
-        // emit CollateralRedeemed(msg.sender, collateralTokenAddress, amount);
+        emit CollateralRedeemed(msg.sender, collateralTokenAddress, amount);
     }
 
     /**
@@ -258,10 +265,6 @@ contract kcEngine is kcCoin, ReentrancyGuard {
         emit kcBorrowed(msg.sender, amount);
     }
 
-    function mintKc(
-        uint256 amountKcToMint
-    ) public moreThanZero(amountKcToMint) nonReentrant {}
-
     /**
      * @dev Repay protocol stablecoins from the caller's debt.
      *
@@ -288,18 +291,34 @@ contract kcEngine is kcCoin, ReentrancyGuard {
         }
     }
 
-    function liquidate() external {}
+    //0. Check if user is liquidateble;
+    //1. Get the user's collateral deposited
+    //2. Remove his position from each deposited collateral
+    //3. Diversify his collateral to engine and liquidator
 
-    function getHealthFactor() external {}
+       /**
+     * @dev Liquidate a position that has breached the LTV ratio for it's basket of collateral.
+     *
+     * @param userToLiquidate the user who's position should be liquidated.
+     */
+    function liquidate(address userToLiquidate) external {
+        bool hasBrokenHealthFactor = revertIfHealthFactorIsBroken(userToLiquidate);
+        if(!hasBrokenHealthFactor) {
+            revert ("User has healthy health factor");
+        }
+        
+        uint256 amountOfCrabBorrowed = getUserKcBalance(userToLiquidate);
+        uint256 collateralLiquidated = 0;        
+        uint256 liquidationReward = amountOfCrabBorrowed * LIQUIDATION_REWARD / 100;
+      
+    }
 
     ////////////////////////////////
     //Private & internal functions//
     ////////////////////////////////
 
     // @dev check the fees for any user's position
-    function _getFeesForPosition(
-        address user
-    ) private returns (uint256 totalFee) {
+    function _getFeesForPosition (address user) private returns (uint256 totalFee) {
         require(
             s_userBorrows[user].borrowAmount != 0,
             "User has not borrowed yet"
@@ -343,6 +362,14 @@ contract kcEngine is kcCoin, ReentrancyGuard {
 
         (, int256 price, , , ) = priceFeed.staleCheckLatestRoundData();
         return (uint256(price) * EQUALIZER_PRECISION * amount) / PRECISION;
+    }
+
+    function getUserOwedAmount() public returns (uint256) {
+        return s_userBorrows[msg.sender].borrowAmount + _getFeesForPosition(msg.sender);
+    }
+
+    function updateLtvRatios(address ltvRatioAddress, uint256 ltvAmount) external {
+        s_collateralTokenAndRatio[ltvRatioAddress] = ltvAmount;
     }
 
     function getTotalBorrowableAmount(
