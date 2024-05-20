@@ -7,6 +7,7 @@ import {kcCoin} from '../../src/kcCoin.sol';
 import {HelperConfig} from '../../script/HelperConfig.s.sol';
 import {kcEngine} from '../../src/kcEngine.sol';
 import {MockERC20} from '../mocks/MockERC20.sol';
+import {kcGovernance} from '../../src/kcGovernanceCoin.sol';
 
 contract kcEngineTest is Test {
     error kcEngine__testMismatchingUsdConvertor();
@@ -14,7 +15,9 @@ contract kcEngineTest is Test {
     DeployKC deployer;
     HelperConfig helperConfig;
     kcCoin kc;
-    kcEngine    engine;
+    kcEngine engine;
+    kcGovernance governance;
+
     address weth;
     address wethUsdPriceFeed;
     address usdc;
@@ -26,7 +29,7 @@ contract kcEngineTest is Test {
 
     function setUp() public {
         deployer = new DeployKC();
-        (kc, engine, helperConfig) = deployer.run();
+        (kc, engine, helperConfig, governance) = deployer.run();
         (wethUsdPriceFeed, weth,,,,,) = helperConfig.activeNetworkConfig();
         vm.deal(user, STARTING_USER_BALANCE);
     }
@@ -44,6 +47,21 @@ contract kcEngineTest is Test {
         console.log('expect usd',expectedUsd);
         console.log('actual usd',actualUsd);
         assertEq(expectedUsd, actualUsd);
+    }
+
+    function testRepay() public {
+        MockERC20(weth).mint(user, STARTING_USER_BALANCE);
+
+        vm.startPrank(user);
+        MockERC20(weth).approve(address(engine), STARTING_USER_BALANCE);
+
+        engine.depositCollateral(weth, STARTING_USER_BALANCE);
+        uint256 deposited = engine.balanceOf(user);
+
+        engine.withdrawCollateral(weth, STARTING_USER_BALANCE);
+        uint256 endingBalance = engine.balanceOf(user);
+        console.log('===>',endingBalance);
+        console.log('===>',deposited);
     }
 
     function testDepositCollateral() public {
@@ -93,7 +111,68 @@ contract kcEngineTest is Test {
         vm.stopPrank();
     }
 
-    function testMint() public {
+    function testFeesGeneration () public {
+       // deposit funds
+        MockERC20(weth).mint(user, amountOfWethCollateral);
+        vm.startPrank(user);
+        MockERC20(weth).approve(address(engine), amountOfWethCollateral);
+        engine.depositCollateral(weth, amountOfWethCollateral);
+
+        // test first borrow
+        vm.warp(block.timestamp + 4 hours);
+        uint256 borrowAmount = 3e18;
+        engine.borrow(borrowAmount);
+
+        uint256 initialFees = engine.getUserOwedAmount();
+
+        vm.warp(block.timestamp + 1835 days);
+        uint256 fees = engine.getUserOwedAmount();
+
+        console.log('==> fees',fees);
+
+        vm.stopPrank();
+    }
+
+    function testHealthFactorUndercollateralized() public {
+        //Borrow maximum amount of tokens, wait a bit
+        //for fees to occur and expect broken health factor
+       MockERC20(weth).mint(user, STARTING_USER_BALANCE);
+        vm.startPrank(user);
+        MockERC20(weth).approve(address(engine), STARTING_USER_BALANCE);
+        engine.depositCollateral(weth, STARTING_USER_BALANCE);
+        uint256 maximumBorrow = engine.getTotalBorrowableAmount(user);
+
+        engine.borrow(maximumBorrow - 1);
+        uint256 kcAmount = engine.getUserKcBalance(user);
+        console.log('--->>>>    ',kcAmount);
+
+        vm.warp(block.timestamp + 4 hours);
+
+        bool healthFactor = engine.revertIfHealthFactorIsBroken(user);
+        assertEq(healthFactor, true);
+        vm.stopPrank();
+    }
+
+    function testHealthFactorOvercollateralized() public {
+        //Borrow maximum amount of tokens, wait a bit
+        //for fees to occur and expect broken health factor
+       MockERC20(weth).mint(user, STARTING_USER_BALANCE);
+        vm.startPrank(user);
+        MockERC20(weth).approve(address(engine), STARTING_USER_BALANCE);
+        engine.depositCollateral(weth, STARTING_USER_BALANCE);
+        uint256 maximumBorrow = engine.getTotalBorrowableAmount(user);
+
+        engine.borrow(maximumBorrow/2);
+        uint256 kcAmount = engine.getUserKcBalance(user);
+
+        vm.warp(block.timestamp + 4 hours);
+
+        bool healthFactor = engine.revertIfHealthFactorIsBroken(user);
+        assertEq(healthFactor, false);
+        vm.stopPrank();
+    }
+
+     function testMint() public {
          // Mint some tokens for the user
         MockERC20(weth).mint(user, STARTING_USER_BALANCE);
     }   

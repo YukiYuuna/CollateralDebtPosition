@@ -2,6 +2,7 @@
 
 import {Script} from 'forge-std/Script.sol';
 import {kcCoin} from '../src/kcCoin.sol';
+import { kcGovernance } from '../src/kcGovernanceCoin.sol';
 import {kcEngine} from '../src/kcEngine.sol';
 import { HelperConfig } from "./HelperConfig.s.sol";
 pragma solidity ^0.8.21;
@@ -16,8 +17,9 @@ contract DeployKC is Script {
     // moved outside of run due to stackTooDeep exception caused by num of local vars
     kcCoin kcStableCoin;
     kcEngine engine;
+    kcGovernance governance;
 
-    function run() external returns(kcCoin, kcEngine, HelperConfig) {
+    function run() external returns(kcCoin, kcEngine, HelperConfig, kcGovernance) {
             HelperConfig helperConfig = new HelperConfig();
         (
             address wethUsdPriceFeed,
@@ -40,9 +42,10 @@ contract DeployKC is Script {
     
         engine = new kcEngine(tokenAddresses, priceFeedAddresses, priceFeedDecimals, tvlRatios, address(kcStableCoin));
         kcStableCoin.transferOwnership(address(engine));
+        governance = new kcGovernance(address(engine));
 
         vm.stopBroadcast();
 
-        return (kcStableCoin, engine, helperConfig);
+        return (kcStableCoin, engine, helperConfig, governance);
     }
 }

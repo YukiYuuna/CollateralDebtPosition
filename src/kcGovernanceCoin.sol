@@ -3,13 +3,12 @@
 pragma solidity ^0.8.21;
 import { ERC20Votes } from '@openzeppelin/contracts/token/ERC20/extensions/ERC20Votes.sol';
 import { ERC20Burnable, ERC20 } from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
-import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
-import {IGov} from './interfaces/IGov.sol';
+import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
+import { IGov } from './interfaces/IGov.sol';
 import { kcEngine } from './kcEngine.sol';
 
 contract kcGovernance is ERC20 {
     kcEngine private i_kcEngine;
-    uint256 public s_maxSupply = 100000000000000000000000;
     uint256 proposalId = 0;
     Proposal[] proposals;
     
@@ -80,6 +79,7 @@ contract kcGovernance is ERC20 {
      *
      * @param proposalId the id corresponding to the proposal to vote for.
      */
+    
     function vote(uint256 proposalId) external {
         Proposal storage proposal = proposals[proposalId];
 
@@ -108,6 +108,10 @@ contract kcGovernance is ERC20 {
 
         proposal.executed = true;
         i_kcEngine.updateLtvRatios(proposal.token, proposal.ltv);
+    }
+
+    function getProposal (uint256 proposalId) external {
+
     }
 }
 

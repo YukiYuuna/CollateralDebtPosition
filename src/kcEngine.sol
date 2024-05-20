@@ -7,6 +7,8 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {OracleLib, AggregatorV3Interface} from "./libraries/OracleLib.sol";
 import {Test, console} from "forge-std/Test.sol";
+import {Ownable} from '@openzeppelin/contracts/access/Ownable.sol';
+import { ILiquidationCallback } from './interfaces/ILiquidationCallback.sol';
 
 /*
  *   @title kcEngine
@@ -26,7 +28,7 @@ import {Test, console} from "forge-std/Test.sol";
  *   @notice the fees are calculated per year as according to IGov stake contract
  *
  */
-contract kcEngine is kcCoin, ReentrancyGuard {
+contract kcEngine is Ownable,kcCoin,ReentrancyGuard {
     ////////////
     // Errors //
     ////////////
@@ -61,14 +63,14 @@ contract kcEngine is kcCoin, ReentrancyGuard {
     uint256 private constant EQUALIZER_PRECISION = 1e10;
     uint256 private constant PRECISION = 1e18;
     uint256 private constant LIQUIDATION_PRECISION = 100;
-    uint256 private LIQUIDATION_REWARD = 20;
+    uint256 private LIQUIDATION_REWARD = 500;
     uint256 private constant INTEREST_PER_SHARE_PER_SECOND = 3_170_979_198; // positionSize/10 = positionSize *
     // seconds_per_year * interestPerSharePerSec
 
     // @dev mapping to hold user borrow info for each user
     mapping(address => UserBorrows) public s_userBorrows;
 
-    // hold of ltv ratios aka how much % each user can mint
+    // @dev mapping of ltv ratios aka how much % each user can mint
     mapping(address => uint256) private s_collateralTokenAndRatio;
 
     // @dev token to priceFeed
@@ -81,8 +83,6 @@ contract kcEngine is kcCoin, ReentrancyGuard {
     // @dev mapping of user to amount he has deposited of each token
     mapping(address user => mapping(address token => uint256 amount)) public s_collateralDeposited;
 
-    // @dev mapping of the amount of kc minted by specific user
-    mapping(address user => uint256 amountKcMinted) private s_kcMinted;
     kcCoin private immutable i_kcStableCoin;
     //The types of tokens the system allows
     address[] s_collateralTokens;
@@ -91,6 +91,9 @@ contract kcEngine is kcCoin, ReentrancyGuard {
     
     // @dev keeps track of accumulated fees in the protocol
     uint256 s_protocolFees;
+
+    address public liquidationAddress = address(0);
+
     ///////////
     //Events///
     ///////////
@@ -100,7 +103,7 @@ contract kcEngine is kcCoin, ReentrancyGuard {
         address indexed token,
         uint256 indexed amount
     );
-    event CollateralRedeemed(address indexed user, address indexed tokenAddress, uint256 indexed);
+    event CollateralRedeemed(address indexed redeemFrom, address indexed redeemTo, address token, uint256 amount);
     event kcBorrowed(address indexed user, uint256 indexed amount);
 
     ////////////
@@ -210,7 +213,7 @@ contract kcEngine is kcCoin, ReentrancyGuard {
 
         s_collateralDeposited[msg.sender][collateralTokenAddress] -= amount;
         IERC20(collateralTokenAddress).transfer(msg.sender, amount);
-        emit CollateralRedeemed(msg.sender, collateralTokenAddress, amount);
+        emit CollateralRedeemed(msg.sender, msg.sender, address(0), amount);
     }
 
     /**
@@ -224,6 +227,7 @@ contract kcEngine is kcCoin, ReentrancyGuard {
     function borrow(uint256 amount) external moreThanZero(amount) nonReentrant {
         uint256 maxBorrowAmount = getTotalBorrowableAmount(msg.sender);
         uint256 userBorrowAmount = s_userBorrows[msg.sender].borrowAmount;
+        console.log("I borrow", userBorrowAmount);
 
         if (userBorrowAmount == 0) {
             require(
@@ -232,8 +236,8 @@ contract kcEngine is kcCoin, ReentrancyGuard {
             );
             s_userBorrows[msg.sender].borrowAmount = amount;
             s_userBorrows[msg.sender].lastPaidAt = block.timestamp;
+            console.log('borrow ==>',s_userBorrows[msg.sender].borrowAmount);
 
-            s_kcMinted[msg.sender] += amount;
             bool hasBrokenHealthFactor = revertIfHealthFactorIsBroken(
                 msg.sender
             );
@@ -244,9 +248,8 @@ contract kcEngine is kcCoin, ReentrancyGuard {
             i_kcStableCoin.mint(msg.sender, amount);
 
             emit kcBorrowed(msg.sender, amount);
-        }
-
-        require(
+        } else {
+             require(
             amount +
                 s_userBorrows[msg.sender].borrowAmount +
                 s_userBorrows[msg.sender].debt <
@@ -263,6 +266,7 @@ contract kcEngine is kcCoin, ReentrancyGuard {
             revert KCEngine__MintReverted();
         }
         emit kcBorrowed(msg.sender, amount);
+        }
     }
 
     /**
@@ -299,19 +303,65 @@ contract kcEngine is kcCoin, ReentrancyGuard {
        /**
      * @dev Liquidate a position that has breached the LTV ratio for it's basket of collateral.
      *
-     * @param userToLiquidate the user who's position should be liquidated.
+     * @param user the user who's position should be liquidated.
      */
-    function liquidate(address userToLiquidate) external {
-        bool hasBrokenHealthFactor = revertIfHealthFactorIsBroken(userToLiquidate);
-        if(!hasBrokenHealthFactor) {
-            revert ("User has healthy health factor");
+
+     function liquidate(address user, ILiquidationCallback liquidationCallback) external { 
+        // get the crab borrowed
+        uint256 amountOfCrabBorrowed = getUserKcBalance(user);
+        uint256 fees = _getFeesForPosition(user);
+        if (amountOfCrabBorrowed + fees == 0) {
+            revert("User has no debt");
         }
-        
-        uint256 amountOfCrabBorrowed = getUserKcBalance(userToLiquidate);
+
+        bool healthFactor = revertIfHealthFactorIsBroken(user);
+
+        if(!healthFactor) {
+            revert("User health factor is not broken");
+        }
+
         uint256 collateralLiquidated = 0;        
         uint256 liquidationReward = amountOfCrabBorrowed * LIQUIDATION_REWARD / 100;
-      
+        uint256 collateralToLiquidate = amountOfCrabBorrowed + liquidationReward;
+        bool isValidLiquidatorAddress = liquidationAddress == address(liquidationCallback) && address(liquidationCallback) != address(0);
+        // loop through all the collateral tokens and liquidate the collateral
+        for (uint256 i = 0; i < s_collateralTokens.length; i++) {
+            //get price for token according to amount
+            //address token = s_collateralTokens[i];
+            //uint256 tokenAmount = s_collateralDeposited[user][token];
+            uint256 price = getPriceInUSDForTokens(s_collateralTokens[i], s_collateralDeposited[user][s_collateralTokens[i]]);
+            uint256 collateralToLiquidateInToken = collateralToLiquidate * price / userCollateralValue;
+            if (collateralToLiquidateInToken >= s_collateralDeposited[user][s_collateralTokens[i]]) {
+                collateralToLiquidateInToken = s_collateralDeposited[user][s_collateralTokens[i]];
+            }
+            // update user collateral
+            s_collateralDeposited[user][s_collateralTokens[i]] -= collateralToLiquidateInToken;
+            if (isValidLiquidatorAddress) {
+                IERC20(s_collateralTokens[i]).transfer(address(liquidationCallback), collateralToLiquidateInToken);
+                liquidationCallback.onCollateralReceived(s_collateralTokens[i], collateralToLiquidateInToken);
+            }
+            // user repays it himself
+            else {
+                IERC20(s_collateralTokens[i]).transfer(msg.sender, collateralToLiquidateInToken);
+                i_kcStableCoin.transferFrom(msg.sender, address(this), price);
+            }        
+            collateralLiquidated += collateralToLiquidateInToken;            
+        }
+
+        for (uint256 i = 0; i < s_collateralTokens.length; i++) {
+            if (liquidationReward <= s_collateralDeposited[user][s_collateralTokens[i]]) {
+                IERC20(s_collateralTokens[i]).transfer(msg.sender, liquidationReward);
+                break;
+            }
+        }
+
+        // update borrowed balance and reset user
+        s_protocolFees -= amountOfCrabBorrowed;
+        delete s_userBorrows[user];
+        i_kcStableCoin.burn(amountOfCrabBorrowed);
+        emit CollateralRedeemed(user, address(liquidationCallback), address(0), collateralLiquidated);
     }
+
 
     ////////////////////////////////
     //Private & internal functions//
@@ -326,22 +376,21 @@ contract kcEngine is kcCoin, ReentrancyGuard {
         s_userBorrows[user].refreshedAt = block.timestamp;
 
         totalFee =
-            s_userBorrows[user].borrowAmount *
-            INTEREST_PER_SHARE_PER_SECOND *
-            (block.timestamp - s_userBorrows[user].lastPaidAt);
+            (s_userBorrows[user].borrowAmount *
+            (INTEREST_PER_SHARE_PER_SECOND) *
+            (block.timestamp - s_userBorrows[user].lastPaidAt)) / PRECISION;
         s_userBorrows[user].debt = totalFee;
     }
 
     function revertIfHealthFactorIsBroken(
         address user
-    ) internal returns (bool isBroken) {
+    ) public returns (bool isBroken) {
         uint256 userBorrowedAmount = getUserKcBalance(user);
         if (userBorrowedAmount == 0) {
-            revert KCEngine__UserHasNotBorrowedKc();
+            return false;
         }
         uint256 fees = _getFeesForPosition(user);
         uint256 userBorrowsLimit = getTotalBorrowableAmount(user);
-
         if (userBorrowedAmount + fees > userBorrowsLimit) {
             return true;
         }
@@ -368,7 +417,7 @@ contract kcEngine is kcCoin, ReentrancyGuard {
         return s_userBorrows[msg.sender].borrowAmount + _getFeesForPosition(msg.sender);
     }
 
-    function updateLtvRatios(address ltvRatioAddress, uint256 ltvAmount) external {
+    function updateLtvRatios(address ltvRatioAddress, uint256 ltvAmount) public onlyOwner {
         s_collateralTokenAndRatio[ltvRatioAddress] = ltvAmount;
     }
 
