@@ -144,7 +144,6 @@ contract kcEngineTest is Test {
 
         engine.borrow(maximumBorrow - 1);
         uint256 kcAmount = engine.getUserKcBalance(user);
-        console.log('--->>>>    ',kcAmount);
 
         vm.warp(block.timestamp + 4 hours);
 

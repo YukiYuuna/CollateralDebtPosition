@@ -314,12 +314,24 @@ contract kcEngine is Ownable,kcCoin,ReentrancyGuard {
             revert("User has no debt");
         }
 
-        bool healthFactor = revertIfHealthFactorIsBroken(user);
-
-        if(!healthFactor) {
-            revert("User health factor is not broken");
+        // get the total value of the collateral
+        uint256 userCollateralValue = 0;
+        uint256 userMaxBorrow = 0;
+        // loop through all the collateral tokens and get the total value of the collateral
+        for (uint256 i = 0; i < s_collateralTokens.length; i++) {
+            // get full price for token and token amount
+            uint256 fullPrice = getPriceInUSDForTokens(s_collateralTokens[i], s_collateralDeposited[user][s_collateralTokens[i]]);
+            // add the price of the token to the total collateral value
+            // to get the total value of the collateral
+            userCollateralValue += fullPrice;
+            // get max borrow according to LTV ratio
+            userMaxBorrow += fullPrice / s_collateralTokenAndRatio[s_collateralTokens[i]];
         }
 
+        if(userMaxBorrow > amountOfCrabBorrowed + fees) {
+            revert("User has not exceeded LTV");
+        }
+        
         uint256 collateralLiquidated = 0;        
         uint256 liquidationReward = amountOfCrabBorrowed * LIQUIDATION_REWARD / 100;
         uint256 collateralToLiquidate = amountOfCrabBorrowed + liquidationReward;
