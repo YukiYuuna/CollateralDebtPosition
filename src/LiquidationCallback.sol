@@ -15,12 +15,12 @@ contract LiquidationCallback is ILiquidationCallback {
     IUniswapV3Factory public constant uniswapV3Factory = IUniswapV3Factory(0x1F98431c8aD98523631AE4a59f267346ea31F984);
     ISwapRouter public constant uniswapV3Router = ISwapRouter(0xE592427A0AEce92De3Edee1F18E0157C05861564);
     kcCoin public immutable kcToken;
-    address public immutable crabEngine;
+    address public immutable engine;
     address public immutable usdc;
 
-    constructor (address coin, address engine, address _usdc) payable {
+    constructor (address coin, address _engine, address _usdc) payable {
         kcToken = kcCoin(coin);
-        crabEngine = engine;
+        engine = _engine;
         usdc = _usdc;
     }
 
@@ -59,6 +59,6 @@ contract LiquidationCallback is ILiquidationCallback {
         });
 
         uint256 amountOut = uniswapV3Router.exactInput(params);
-        kcToken.transferFrom(address(this), crabEngine, amountOut);
+        kcToken.transferFrom(address(this), engine, amountOut);
     }
 }

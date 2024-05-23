@@ -39,9 +39,10 @@ contract DeployKC is Script {
         vm.startBroadcast();
     
         kcStableCoin = new kcCoin();
-    
+        address alice = makeAddr("alice");
         engine = new kcEngine(tokenAddresses, priceFeedAddresses, priceFeedDecimals, tvlRatios, address(kcStableCoin));
         kcStableCoin.transferOwnership(address(engine));
+        engine.transferOwnership(alice);
         governance = new kcGovernance(address(engine));
 
         vm.stopBroadcast();
