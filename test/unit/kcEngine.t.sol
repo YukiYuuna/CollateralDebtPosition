@@ -51,10 +51,11 @@ contract kcEngineTest is Test {
         // 15e18 * 2000/ETH = 30,000e18
         uint256 expectedUsd = 30000e18;
         uint256 actualUsd = engine.getPriceInUSDForTokens(weth, ethAmount);
-        console.log('expect usd',expectedUsd);
-        console.log('actual usd',actualUsd);
+        console.log('expect usd',expectedUsd/1e18);
+        console.log('actual usd',actualUsd/1e18);
         assertEq(expectedUsd, actualUsd);
     }
+
 
     function testDepositCollateral() public {
         MockERC20(weth).mint(user, STARTING_USER_BALANCE);
@@ -82,9 +83,10 @@ contract kcEngineTest is Test {
 
         // test first borrow
         vm.warp(block.timestamp + 12 seconds);
-        uint256 borrowAmount = 1e18;
+        uint256 borrowAmount = 4e18;
         engine.borrow(borrowAmount);
         uint256 userKc = engine.getUserKcBalance(user);
+        console.log('==> user KC',userKc/1e18);
         assertEq(userKc, borrowAmount);
 
         vm.stopPrank();
@@ -137,7 +139,7 @@ contract kcEngineTest is Test {
 
         engine.borrow(maximumBorrow - 1);
         uint256 kcAmount = engine.getUserKcBalance(user);
-
+        console.log('===> kc amount',kcAmount/1e18);
         vm.warp(block.timestamp + 4 hours);
 
         bool healthFactor = engine.revertIfHealthFactorIsBroken(user);
@@ -183,16 +185,14 @@ function testRepay() public {
         vm.warp(block.timestamp + 12 seconds);
         uint256 owedAmount = engine.getUserOwedAmount();
         vm.stopPrank();
-
+        kc.balanceOf(user);
         // give the user funds to pay back
-        vm.prank(0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512);
-        engine.mint(user, owedAmount);
-
+        vm.prank(address(engine));
+        kc.mint(user, owedAmount);
         // pay properly
         vm.startPrank(user);
-        engine.approve(address(engine), owedAmount);
+        kc.approve(address(engine), owedAmount);
         engine.repay(owedAmount);
-
         vm.stopPrank();
     }
 
@@ -200,7 +200,7 @@ function testRepay() public {
         // Setup: Mint some tokens for the user and deposit them as collateral
         // ...
         MockERC20(weth).mint(user, STARTING_USER_BALANCE);
-        MockERC20(weth).mint(alice, 10 ether);
+        MockERC20(weth).mint(alice, STARTING_USER_BALANCE);
 
         vm.startPrank(user);
         MockERC20(weth).approve(address(engine), STARTING_USER_BALANCE);
@@ -208,27 +208,25 @@ function testRepay() public {
         uint256 maxBorrowAmount = engine.getTotalBorrowableAmount(user);
 
         engine.borrow(maxBorrowAmount-999);
-        vm.warp(3 hours);
+        vm.warp(block.timestamp + 3 hours);
         bool healthFactor = engine.revertIfHealthFactorIsBroken(user);
         console.log(healthFactor);
         vm.stopPrank();
 
         vm.startPrank(alice);
         MockERC20(weth).approve(address(engine), STARTING_USER_BALANCE);
-        
-        engine.depositCollateral(weth, 5 ether);
-        engine.borrow(3 ether);
-        engine.approve(address(engine), STARTING_USER_BALANCE);
 
-        engine.liquidateWithUniswap(user, liquidationCB);
+        engine.depositCollateral(weth, 4 ether);
+        uint256 maxBorrowAmountAlice = engine.getTotalBorrowableAmount(alice);
+        engine.borrow(maxBorrowAmountAlice-999);
+        kc.approve(address(engine), UINT256_MAX);
+        console.log('===> b4 liquidation',MockERC20(weth).balanceOf(alice)/1e18);
 
-        // Test 1: User has no debt
-        // ...
+        engine.liquidate(user);
+        console.log('===> After liquidation',MockERC20(weth).balanceOf(alice)/1e17);
 
-        // Test 2: User's collateral value is insufficient to cover the debt
-        // ...
 
-        // Test 3: User's collateral value is sufficient to cover the debt
-        // ...
+        console.log('==> user new value',engine.getTotalBorrowableAmount(user));
+        vm.stopPrank();
     }
 }

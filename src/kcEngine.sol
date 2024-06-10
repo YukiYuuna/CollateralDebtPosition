@@ -9,6 +9,7 @@ import {OracleLib, AggregatorV3Interface} from "./libraries/OracleLib.sol";
 import {Test, console} from "forge-std/Test.sol";
 import {Ownable} from '@openzeppelin/contracts/access/Ownable.sol';
 import { ILiquidationCallback } from './interfaces/ILiquidationCallback.sol';
+import './kcGovernanceCoin.sol';
 
 /*
  *   @title kcEngine
@@ -28,7 +29,7 @@ import { ILiquidationCallback } from './interfaces/ILiquidationCallback.sol';
  *   @notice the fees are calculated per year as according to IGov stake contract
  *
  */
-contract kcEngine is Ownable,kcCoin,ReentrancyGuard {
+contract kcEngine is Ownable,ReentrancyGuard {
     ////////////
     // Errors //
     ////////////
@@ -63,7 +64,7 @@ contract kcEngine is Ownable,kcCoin,ReentrancyGuard {
     uint256 private constant EQUALIZER_PRECISION = 1e10;
     uint256 private constant PRECISION = 1e18;
     uint256 private constant LIQUIDATION_PRECISION = 100;
-    uint256 private LIQUIDATION_REWARD = 500;
+    uint256 private LIQUIDATION_REWARD = 5;
     uint256 private constant INTEREST_PER_SHARE_PER_SECOND = 3_170_979_198; // positionSize/10 = positionSize *
     // seconds_per_year * interestPerSharePerSec
 
@@ -86,9 +87,9 @@ contract kcEngine is Ownable,kcCoin,ReentrancyGuard {
     kcCoin private immutable i_kcStableCoin;
     //The types of tokens the system allows
     address[] s_collateralTokens;
-    // @dev Keeps track of total debt accumulated in the contract
     
-   
+    //@dev keeps the address of governance engine for permissions
+    address governanceAddress;
 
     address public liquidationAddress = address(0);
 
@@ -132,7 +133,7 @@ contract kcEngine is Ownable,kcCoin,ReentrancyGuard {
         uint8[] memory decimal,
         uint8[] memory ltvRatio,
         address kcAddress
-    ) {
+    ) Ownable(msg.sender) {
         //This follows USD Price feed -> Eth/USD, Btc/USD
         if (
             tokenAddresses.length != priceFeedAddresses.length ||
@@ -153,6 +154,15 @@ contract kcEngine is Ownable,kcCoin,ReentrancyGuard {
         }
         i_kcStableCoin = kcCoin(kcAddress);
     }
+
+    modifier onlyGovernance() {
+        console.log('onlyGov msg sender',msg.sender);
+        if (governanceAddress != msg.sender) {
+            revert ("Function must be executed through governance execute");
+        }
+        _;
+    }
+
 
     ////////////
     //External/
@@ -186,7 +196,6 @@ contract kcEngine is Ownable,kcCoin,ReentrancyGuard {
         if (!success) {
             revert kcEngine__TransferFailed();
         }
-        console.log("I reach end of");
     }
 
     /**
@@ -206,7 +215,7 @@ contract kcEngine is Ownable,kcCoin,ReentrancyGuard {
 
         uint256 collateralAfterWithdrawal = s_collateralDeposited[msg.sender][collateralTokenAddress] - amount;
            uint256 collateralValueRequiredToKeepltv =
-                (collateralAfterWithdrawal - amountBorrowed) * tokenData.ltvRatio / 100;
+                (collateralAfterWithdrawal - amountBorrowed) * tokenData.ltvRatio / LIQUIDATION_PRECISION;
             if (collateralValueRequiredToKeepltv > collateralAfterWithdrawal) {
                 revert("Withdrawal would violate LTV ratio");
             }
@@ -226,7 +235,9 @@ contract kcEngine is Ownable,kcCoin,ReentrancyGuard {
 
     function borrow(uint256 amount) external moreThanZero(amount) nonReentrant {
         uint256 maxBorrowAmount = getTotalBorrowableAmount(msg.sender);
+        console.log('==> Max borrow',maxBorrowAmount/1e18);
         uint256 userBorrowAmount = s_userBorrows[msg.sender].borrowAmount;
+        //
 
         if (userBorrowAmount == 0) {
             require(
@@ -258,6 +269,7 @@ contract kcEngine is Ownable,kcCoin,ReentrancyGuard {
 
         s_userBorrows[msg.sender].borrowAmount += amount;
         s_userBorrows[msg.sender].lastPaidAt = block.timestamp;
+        console.log("I FINISH BORROW");
 
         bool minted = i_kcStableCoin.mint(msg.sender, amount);
         if (minted != true) {
@@ -283,21 +295,14 @@ contract kcEngine is Ownable,kcCoin,ReentrancyGuard {
         if(amount != (borrowAmount + fees)) {
             revert ("User must payback the exact amount of debt");
         }
-        
-        uint256 amount123 = getUserKcBalance(msg.sender);
-        console.log("I reach", amount123);
+     
         delete s_userBorrows[msg.sender];
-
         bool success = i_kcStableCoin.transferFrom(msg.sender, address(this), amount);
-        console.log("I reach after mint");  
 
         if(!success) {
             revert KCEngine__MintReverted();
         }
-        console.log("I reach after mint");
-
         i_kcStableCoin.burn(amount);
-        console.log("I reach burn");
 
         emit borrowedAmountRepaid(msg.sender, amount);
 
@@ -306,25 +311,10 @@ contract kcEngine is Ownable,kcCoin,ReentrancyGuard {
     //0. Check if user is liquidateble;
     //1. Get the user's collateral deposited
     //2. Remove his position from each deposited collateral
-    //3. Diversify his collateral to engine and liquidator
-
-     
-
+    //3. Diversify his collateral to engine and liquidator     
 
     function liquidate(address user) external {
-
-    }
-
-      /**
-     * @dev Liquidate a position that has breached the LTV ratio for it's basket of collateral.
-     *
-     * @param user the user who's position should be liquidated.
-     * 
-     * @param liquidationCallback the liquidation callback contract to send collateral to.
-     */
-
-     function liquidateWithUniswap(address user, ILiquidationCallback liquidationCallback) external { 
-        // get the crab borrowed
+// get the crab borrowed
         uint256 amountOfKcBorrowed = getUserKcBalance(user);
         uint256 fees = _getFeesForPosition(user);
         if (amountOfKcBorrowed + fees == 0) {
@@ -350,9 +340,8 @@ contract kcEngine is Ownable,kcCoin,ReentrancyGuard {
         }
         
         uint256 collateralLiquidated = 0;        
-        uint256 liquidationReward = amountOfKcBorrowed * LIQUIDATION_REWARD / 100;
-        uint256 collateralToLiquidate = amountOfKcBorrowed + liquidationReward;
-        bool isValidLiquidatorAddress = liquidationAddress == address(liquidationCallback) && address(liquidationCallback) != address(0);
+        uint256 collateralToLiquidate = amountOfKcBorrowed;
+        
         // loop through all the collateral tokens and liquidate the collateral
         for (uint256 i = 0; i < s_collateralTokens.length; i++) {
             //get price for token according to amount
@@ -366,38 +355,34 @@ contract kcEngine is Ownable,kcCoin,ReentrancyGuard {
             // update user collateral
 
             s_collateralDeposited[user][s_collateralTokens[i]] -= collateralToLiquidateInToken;
-            if (isValidLiquidatorAddress) {
-                IERC20(s_collateralTokens[i]).transfer(address(liquidationCallback), collateralToLiquidateInToken);
-                liquidationCallback.onCollateralReceived(s_collateralTokens[i], collateralToLiquidateInToken);
-            }
-            // user repays it himself
-            else {
-                IERC20(s_collateralTokens[i]).transfer(msg.sender, collateralToLiquidateInToken);
 
-                i_kcStableCoin.transferFrom(msg.sender, address(this), price);
-            }        
-            collateralLiquidated += collateralToLiquidateInToken;            
-        }
+            //1.Alice repays position debt ENTIRE DEBT
+            //2. Reward Alice from 900kc to 900$ worth of ETH 1-> 1
+            //3. Reward alice from 5% from entire position -> 5% of 1ETH
+            //4. Borrow must be deleted
+            //5. Add remeaning to collateral debt deposited or som shi ;3
+            console.log('====>',collateralToLiquidateInToken);
+            IERC20(s_collateralTokens[i]).transfer(msg.sender, collateralToLiquidateInToken);
 
-        for (uint256 i = 0; i < s_collateralTokens.length; i++) {
-            if (liquidationReward <= s_collateralDeposited[user][s_collateralTokens[i]]) {
-                IERC20(s_collateralTokens[i]).transfer(msg.sender, liquidationReward);
-                break;
-            }
+            i_kcStableCoin.transferFrom(msg.sender, address(this), amountOfKcBorrowed);
+            
+            s_userBorrows[msg.sender].borrowAmount -= amountOfKcBorrowed;
+            collateralLiquidated += collateralToLiquidateInToken; 
         }
 
         // update borrowed balance and reset user
         delete s_userBorrows[user];
         i_kcStableCoin.burn(amountOfKcBorrowed);
-        emit CollateralRedeemed(user, address(liquidationCallback), address(0), collateralLiquidated);
-    }
 
+        emit CollateralRedeemed(user, address(this), address(0), collateralLiquidated);
+    }
 
     ////////////////////////////////
     //Private & internal functions//
     ////////////////////////////////
 
-    // @dev check the fees for any user's position
+    // @dev check the fees for any user's position 
+    // Updates refreshedAt for new fees
     function _getFeesForPosition (address user) public returns (uint256 totalFee) {
         require(
             s_userBorrows[user].borrowAmount != 0,
@@ -442,15 +427,36 @@ contract kcEngine is Ownable,kcCoin,ReentrancyGuard {
             s_collateralTokenData[token].priceFeedAddress
         );
 
+        CollateralToken storage tokenData = s_collateralTokenData[token];
         (, int256 price, , , ) = priceFeed.staleCheckLatestRoundData();
-        return (uint256(price) * EQUALIZER_PRECISION * amount) / PRECISION;
+        return ((uint256(price) * EQUALIZER_PRECISION) * amount) / PRECISION;
+    }
+
+    function getTokenAmountFromUsd(
+        address token,
+        uint256 usdAmountInWei
+    ) public view returns (uint256) {
+        // price of eth or token
+        // $/Eth ??, 1000$ / ETH = 0.5eth
+        AggregatorV3Interface priceFeed = AggregatorV3Interface(
+            s_priceFeeds[token]
+        );
+        (, int256 price, , , ) = priceFeed.staleCheckLatestRoundData();
+        // $100e18 USD Debt
+        // 1 ETH = 2000 USD
+        // The returned value from Chainlink will be 2000 * 1e8
+        // Most USD pairs have 8 decimals, so we will just pretend they all do
+        return
+            ((usdAmountInWei * PRECISION) / (uint256(price) *
+            EQUALIZER_PRECISION));
     }
 
     function getUserOwedAmount() public returns (uint256) {
         return s_userBorrows[msg.sender].borrowAmount + _getFeesForPosition(msg.sender);
     }
 
-    function updateLtvRatios(address ltvRatioAddress, uint256 ltvAmount) public onlyOwner {
+    function updateLtvRatios(address ltvRatioAddress, uint256 ltvAmount) public onlyGovernance {
+        console.log("I REACH HERE");
         s_collateralTokenAndRatio[ltvRatioAddress] = ltvAmount;
     }
 
@@ -462,11 +468,98 @@ contract kcEngine is Ownable,kcCoin,ReentrancyGuard {
             uint256 tokenAmount = s_collateralDeposited[user][token];
             uint256 fullPrice = getPriceInUSDForTokens(token, tokenAmount);
 
-            amount += fullPrice / s_collateralTokenAndRatio[token];
+            amount += fullPrice * s_collateralTokenAndRatio[token] / 100 ;
         }
     }
 
     function getUserKcBalance(address user) public view returns (uint256) {
         return s_userBorrows[user].borrowAmount;
     }
+
+    function setKcGovernanceAddress(address govAddress) external onlyOwner {
+        governanceAddress = govAddress;
+    }
+
+    /**
+     * @dev Liquidate a position that has breached the LTV ratio for it's basket of collateral.
+     *
+     * @param user the user who's position should be liquidated.
+     * 
+     * @param liquidationCallback the liquidation callback contract to send collateral to.
+     */
+
+     function liquidateWithUniswap(address user, ILiquidationCallback liquidationCallback) external { 
+        // get the crab borrowed
+        uint256 amountOfKcBorrowed = getUserKcBalance(user);
+        uint256 fees = _getFeesForPosition(user);
+        if (amountOfKcBorrowed + fees == 0) {
+            revert("User has no debt");
+        }
+
+        // get the total value of the collateral
+        uint256 userCollateralValue = 0;
+        uint256 userMaxBorrow = 0;
+        // loop through all the collateral tokens and get the total value of the collateral
+        for (uint256 i = 0; i < s_collateralTokens.length; i++) {
+            // get full price for token and token amount
+            uint256 fullPrice = getPriceInUSDForTokens(s_collateralTokens[i], s_collateralDeposited[user][s_collateralTokens[i]]);
+            // add the price of the token to the total collateral value
+            // to get the total value of the collateral
+            userCollateralValue += fullPrice;
+            // get max borrow according to LTV ratio
+            userMaxBorrow += fullPrice / s_collateralTokenAndRatio[s_collateralTokens[i]];
+        }
+
+        if(userMaxBorrow > amountOfKcBorrowed + fees) {
+            revert("User has not exceeded LTV");
+        }
+        
+        uint256 collateralLiquidated = 0;        
+        uint256 liquidationReward = amountOfKcBorrowed * LIQUIDATION_REWARD / LIQUIDATION_PRECISION;
+        uint256 collateralToLiquidate = amountOfKcBorrowed + liquidationReward;
+        bool isValidLiquidatorAddress = liquidationAddress == address(liquidationCallback) && address(liquidationCallback) != address(0);
+        // loop through all the collateral tokens and liquidate the collateral
+        for (uint256 i = 0; i < s_collateralTokens.length; i++) {
+            //get price for token according to amount
+            //address token = s_collateralTokens[i];
+            //uint256 tokenAmount = s_collateralDeposited[user][token];
+            uint256 price = getPriceInUSDForTokens(s_collateralTokens[i], s_collateralDeposited[user][s_collateralTokens[i]]);
+            uint256 collateralToLiquidateInToken = collateralToLiquidate * price / userCollateralValue;
+            if (collateralToLiquidateInToken >= s_collateralDeposited[user][s_collateralTokens[i]]) {
+                collateralToLiquidateInToken = s_collateralDeposited[user][s_collateralTokens[i]];
+            }
+            // update user collateral
+
+            s_collateralDeposited[user][s_collateralTokens[i]] -= collateralToLiquidateInToken;
+            if (isValidLiquidatorAddress) {
+                IERC20(s_collateralTokens[i]).transfer(address(liquidationCallback), collateralToLiquidateInToken);
+                liquidationCallback.onCollateralReceived(s_collateralTokens[i], collateralToLiquidateInToken);
+            }
+            // user repays it himself
+            else {
+                IERC20(s_collateralTokens[i]).transfer(msg.sender, collateralToLiquidateInToken);
+
+                i_kcStableCoin.transferFrom(msg.sender, address(this), price);
+            }
+            collateralLiquidated += collateralToLiquidateInToken;            
+        }
+
+        for (uint256 i = 0; i < s_collateralTokens.length; i++) {
+            if (liquidationReward <= s_collateralDeposited[user][s_collateralTokens[i]]) {
+                IERC20(s_collateralTokens[i]).transfer(msg.sender, liquidationReward);
+                break;
+            }
+        }
+
+        // update borrowed balance and reset user
+        delete s_userBorrows[user];
+        
+        i_kcStableCoin.burn(amountOfKcBorrowed);
+        emit CollateralRedeemed(user, address(liquidationCallback), address(0), collateralLiquidated);
+    }
+
 }
+
+
+
+

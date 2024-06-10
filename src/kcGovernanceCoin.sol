@@ -6,25 +6,29 @@ import { ERC20Burnable, ERC20 } from "@openzeppelin/contracts/token/ERC20/extens
 import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
 import { IGov } from './interfaces/IGov.sol';
 import { kcEngine } from './kcEngine.sol';
+import { Test, console } from "forge-std/Test.sol";
 
-contract kcGovernance is ERC20 {
+contract kcGovernance is Ownable, ERC20, ERC20Burnable {
     kcEngine private i_kcEngine;
-    uint256 proposalId = 0;
-    Proposal[] proposals;
+    uint256 proposalId;
+
+    // Define a mapping to store the proposals
+    mapping(uint256 => Proposal) public proposals;
     
     mapping(address => uint256) private s_userVotingPower;
     mapping(address => mapping(uint256 => bool)) private s_userHasVoted;
 
+
     struct Proposal { 
         bool executed;
-        address caller;
+        address proposer;
         address token;
         uint256 ltv;
         uint256 yesVotes;
         uint256 endTime;
     }
 
-    constructor(address kcEngineAddress)ERC20('kcGovernance','kGov') {
+    constructor (address kcEngineAddress) ERC20('kcGovernance','kGov') Ownable(msg.sender) {
         i_kcEngine = kcEngine(kcEngineAddress);
     }
 
@@ -40,10 +44,10 @@ contract kcGovernance is ERC20 {
         return true;
     }
 
-    function addVotesToUser() external {
-        uint256 userOwedBalance = i_kcEngine.getUserOwedAmount();
-        bool isMinted = mint(userOwedBalance, msg.sender);
-        s_userVotingPower[msg.sender] = userOwedBalance;
+    function addVotesToUser(address user, uint256 amount) external onlyOwner {
+        s_userVotingPower[user] += amount;
+        mint(amount, user);
+        console.log('===========>> owner',owner());
     }
 
       /**
@@ -62,15 +66,23 @@ contract kcGovernance is ERC20 {
         if(ltv > 99) {
             revert("kc Engine ratios cannot go over 99");
         }
+        console.log('prop id',proposalId);
+
+        console.log(token);
+        console.log(ltv);
 
         proposals[proposalId] = Proposal({
             executed: false,
-            caller: msg.sender,
+            proposer: msg.sender,
             token: token,
             ltv: ltv,
             yesVotes: 0,
             endTime: block.timestamp + 5 days
         });
+
+        vote(proposalId);
+
+        return proposalId;
     }
 
     /**
@@ -80,12 +92,16 @@ contract kcGovernance is ERC20 {
      * @param proposalId the id corresponding to the proposal to vote for.
      */
     
-    function vote(uint256 proposalId) external {
+    function vote(uint256 proposalId) public {
         Proposal storage proposal = proposals[proposalId];
 
-        if(block.timestamp < proposal.endTime) {
+        console.log(proposal.endTime);
+        if(block.timestamp > proposal.endTime) {
             revert ("Proposal has expired");
         }        
+
+         // Check if the user has already voted on this proposal
+        require(!s_userHasVoted[msg.sender][proposalId], "User has already voted on this proposal");
 
         proposal.yesVotes += balanceOf(msg.sender);
         s_userHasVoted[msg.sender][proposalId] = true;
@@ -94,7 +110,7 @@ contract kcGovernance is ERC20 {
     function execute (uint256 proposalId) external {
         Proposal storage proposal = proposals[proposalId];
 
-        if(block.timestamp > proposal.endTime) {
+        if(block.timestamp < proposal.endTime) {
             revert ("Proposal has not yet ended");
         }
 
@@ -107,11 +123,13 @@ contract kcGovernance is ERC20 {
         }
 
         proposal.executed = true;
+        console.log("I reach b4 update ltv ratios", proposal.token,"ltv" ,proposal.ltv);
         i_kcEngine.updateLtvRatios(proposal.token, proposal.ltv);
     }
 
-    function getProposal (uint256 proposalId) external {
-
+    function getProposal (uint256 proposalId) external returns (bool executed, address proposer, uint256 ltv,address token, uint256 yesVotes, uint256 endTime){
+        Proposal memory proposal = proposals[proposalId];
+        return (proposal.executed, proposal.proposer, proposal.ltv,proposal.token, proposal.yesVotes, proposal.endTime);
     }
 }
 
