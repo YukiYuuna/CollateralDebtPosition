@@ -3,10 +3,8 @@
 import {ICDP} from "./interfaces/ICDP.sol";
 import {kcCoin} from "./kcCoin.sol";
 pragma solidity ^0.8.21;
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {OracleLib, AggregatorV3Interface} from "./libraries/OracleLib.sol";
-import {Test, console} from "forge-std/Test.sol";
 import {Ownable} from '@openzeppelin/contracts/access/Ownable.sol';
 import { ILiquidationCallback } from './interfaces/ILiquidationCallback.sol';
 import './kcGovernanceCoin.sol';
@@ -29,7 +27,7 @@ import './kcGovernanceCoin.sol';
  *   @notice the fees are calculated per year as according to IGov stake contract
  *
  */
-contract kcEngine is Ownable,ReentrancyGuard {
+contract kcEngine is Ownable {
     ////////////
     // Errors //
     ////////////
@@ -156,7 +154,6 @@ contract kcEngine is Ownable,ReentrancyGuard {
     }
 
     modifier onlyGovernance() {
-        console.log('onlyGov msg sender',msg.sender);
         if (governanceAddress != msg.sender) {
             revert ("Function must be executed through governance execute");
         }
@@ -183,7 +180,6 @@ contract kcEngine is Ownable,ReentrancyGuard {
         external
         moreThanZero(amountCollateral)
         isAllowedToken(collateralToken)
-        nonReentrant
     {
         s_collateralDeposited[msg.sender][collateralToken] += amountCollateral;
         emit CollateralDeposited(msg.sender, collateralToken, amountCollateral);
@@ -233,9 +229,8 @@ contract kcEngine is Ownable,ReentrancyGuard {
      * @param amount the amount to borrow.
      */
 
-    function borrow(uint256 amount) external moreThanZero(amount) nonReentrant {
+    function borrow(uint256 amount) external moreThanZero(amount) {
         uint256 maxBorrowAmount = getTotalBorrowableAmount(msg.sender);
-        console.log('==> Max borrow',maxBorrowAmount/1e18);
         uint256 userBorrowAmount = s_userBorrows[msg.sender].borrowAmount;
         //
 
@@ -246,7 +241,6 @@ contract kcEngine is Ownable,ReentrancyGuard {
             );
             s_userBorrows[msg.sender].borrowAmount = amount;
             s_userBorrows[msg.sender].lastPaidAt = block.timestamp;
-            console.log('borrow ==>',s_userBorrows[msg.sender].borrowAmount);
 
             bool hasBrokenHealthFactor = revertIfHealthFactorIsBroken(
                 msg.sender
@@ -269,7 +263,6 @@ contract kcEngine is Ownable,ReentrancyGuard {
 
         s_userBorrows[msg.sender].borrowAmount += amount;
         s_userBorrows[msg.sender].lastPaidAt = block.timestamp;
-        console.log("I FINISH BORROW");
 
         bool minted = i_kcStableCoin.mint(msg.sender, amount);
         if (minted != true) {
@@ -361,7 +354,6 @@ contract kcEngine is Ownable,ReentrancyGuard {
             //3. Reward alice from 5% from entire position -> 5% of 1ETH
             //4. Borrow must be deleted
             //5. Add remeaning to collateral debt deposited or som shi ;3
-            console.log('====>',collateralToLiquidateInToken);
             IERC20(s_collateralTokens[i]).transfer(msg.sender, collateralToLiquidateInToken);
 
             i_kcStableCoin.transferFrom(msg.sender, address(this), amountOfKcBorrowed);
@@ -456,7 +448,6 @@ contract kcEngine is Ownable,ReentrancyGuard {
     }
 
     function updateLtvRatios(address ltvRatioAddress, uint256 ltvAmount) public onlyGovernance {
-        console.log("I REACH HERE");
         s_collateralTokenAndRatio[ltvRatioAddress] = ltvAmount;
     }
 

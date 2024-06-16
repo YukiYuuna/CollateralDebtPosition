@@ -108,8 +108,8 @@ contract KCGovernanceCoinTest is Test {
     function testAddingVotesInvalidOwner() public {
         vm.startPrank(user2);
         governance.addVotesToUser(user2, 300);
-        vm.stopPrank();
         vm.expectRevert();
+        vm.stopPrank();
     }
 
     function testAddingVotesToUsers() public {
@@ -132,7 +132,7 @@ contract KCGovernanceCoinTest is Test {
         vm.stopPrank();
 
         vm.warp(block.timestamp + 7 days);
-        
+
         governance.execute(proposalId);
 
     }
