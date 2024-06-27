@@ -1,5 +1,5 @@
-Vro stablecoin
-The system is a decentralized stablecoin system called vro. It is designed to maintain a 1 token == $1 peg at all times. The system allows users to deposit collateral, borrow stablecoins, and repay borrowed stablecoins. The system is based on the MakerDAO DSS system.
+Kaiba corp protocol
+The system is a decentralized stablecoin system called KC. It is designed to maintain a 1 token == $1 peg at all times. The system allows users to deposit collateral, borrow stablecoins, and repay borrowed stablecoins. The system is based on the MakerDAO DSS system.
 
 Users interact with the system through the following functions:
 
@@ -23,7 +23,7 @@ The system uses a few key formulas:
 The system uses a formula to calculate the amount of stablecoins a user can borrow. This formula takes into account the user's collateral and the total debt of the protocol. The system uses a formula to calculate the fee for a user's position. This formula takes into account the amount of stablecoins borrowed and the time elapsed since the borrowing. The system uses a formula to calculate the USD price for tokens. This formula takes into account the price feed for the token and the amount of tokens.
 
 What is the paradox described? What is your decision to address it and why?
-In the Vro system, the interest for the borrowed stablecoins is paid back in the form of a fee. This fee is typically a percentage of the borrowed amount, and it goes to the system itself, not to any specific user. The system can use these fees to maintain its operations, such as paying for transaction processing and system upgrades.
+In the kc system, the interest for the borrowed stablecoins is paid back in the form of a fee. This fee is typically a percentage of the borrowed amount, and it goes to the system itself, not to any specific user. The system can use these fees to maintain its operations, such as paying for transaction processing and system upgrades.
 
 The stablecoins that must pay back the interest come from the system's reserves. When a user borrows stablecoins, the system mints new stablecoins and sends them to the user. When the user repays the borrowed stablecoins, the system burns the repaid stablecoins and returns the collateral to the user. The system's reserves are made up of the collateral deposited by users, so they are always available to cover the total debt.
 
